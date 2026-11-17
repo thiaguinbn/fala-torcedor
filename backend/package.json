@@ -1,0 +1,5 @@
+{
+  "name": "fala-torcedor-api", "version": "1.0.0", "private": true, "type": "module",
+  "scripts": {"dev": "node --watch src/server.js", "start": "node src/server.js", "db:migrate": "node src/migrate.js", "test": "node --test --test-concurrency=1"},
+  "dependencies": {"express": "^5.2.1", "pg": "^8.16.3", "dotenv": "^17.2.3", "cors": "^2.8.5"}
+}
