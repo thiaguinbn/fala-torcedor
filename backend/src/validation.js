@@ -2,7 +2,7 @@ export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 export function parseId(value) {
-  if (!/^[1-9]\d*$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value) > 2147483647) {
+  if (!['string', 'number'].includes(typeof value) || !/^[1-9]\d*$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value) > 2147483647) {
     throw new HttpError(400, 'Identificador inválido.');
   }
   return Number(value);
@@ -19,7 +19,9 @@ export function cpfValido(cpf) {
 }
 function dataValida(value, label) {
   const date = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(value + 'T00:00:00Z') : new Date(NaN);
-  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value || value < '0001-01-01' || value > new Date().toISOString().slice(0, 10)) {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value || value < '0001-01-01' || value > today) {
     throw new HttpError(400, `${label} deve ser uma data válida e não pode estar no futuro.`);
   }
   return value;

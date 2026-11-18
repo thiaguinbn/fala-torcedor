@@ -15,6 +15,24 @@ test('rejeita datas inexistentes, futuras e séries desconhecidas', () => {
   assert.throws(() => validate({ ...equipe, serie: 'Z' }, 'equipe'));
 });
 test('rejeita IDs inválidos e nomes fora do limite', () => {
-  for (const value of [0, -1, '1abc', '1.1', '9999999999999']) assert.throws(() => parseId(value));
+  for (const value of [0, -1, '1abc', '1.1', '9999999999999', [1], ['1'], {}, true, null, undefined]) {
+    assert.throws(() => parseId(value), { status: 400 });
+  }
+  assert.equal(parseId('2147483647'), 2147483647);
+  assert.equal(parseId(1), 1);
   assert.throws(() => validate({ nome: ' ', data_fundacao: '2000-01-01', serie: 'A' }, 'equipe'));
+});
+
+test('rejeita amanhã mesmo depois da virada do dia em UTC', t => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = 'America/Sao_Paulo';
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-02T01:00:00Z') });
+  try {
+    const team = { nome: 'Clube Teste', data_fundacao: '2026-01-01', serie: 'A' };
+    assert.equal(validate(team, 'equipe')[1], '2026-01-01');
+    assert.throws(() => validate({ ...team, data_fundacao: '2026-01-02' }, 'equipe'), { status: 400 });
+  } finally {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+  }
 });

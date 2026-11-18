@@ -40,6 +40,7 @@ test('CRUD HTTP com PostgreSQL real e esquema isolado', { skip: !process.env.TES
     await t.test('rejeita CPF inválido e equipe inexistente', async () => {
       assert.equal((await request('/torcedores', 'POST', { ...fan, cpf: '11111111111', equipe_id: teamId })).status, 400);
       assert.equal((await request('/torcedores', 'POST', { ...fan, equipe_id: 999999 })).status, 409);
+      assert.equal((await request('/torcedores', 'POST', { ...fan, equipe_id: [teamId] })).status, 400);
     });
     await t.test('cria torcedor, mantém a relação e impede CPF duplicado', async () => {
       const created = await request('/torcedores', 'POST', { ...fan, equipe_id: teamId });
@@ -61,6 +62,44 @@ test('CRUD HTTP com PostgreSQL real e esquema isolado', { skip: !process.env.TES
       assert.equal(saved.nome, 'Torcedor Editado');
       assert.equal(saved.equipe_nome, 'Equipe Editada');
       assert.equal(saved.equipe_serie, 'B');
+    });
+    await t.test('transfere torcedor e atualiza a contagem de ambas as equipes', async () => {
+      const second = await request('/equipes', 'POST', { ...team, nome: 'Outra Equipe' });
+      assert.equal(second.status, 201);
+      const secondId = second.body.id;
+      assert.equal((await request(`/torcedores/${fanId}`, 'PUT', { ...fan, equipe_id: secondId })).status, 200);
+      assert.equal((await request(`/equipes/${teamId}`)).body.total_torcedores, 0);
+      assert.equal((await request(`/equipes/${secondId}`)).body.total_torcedores, 1);
+      assert.equal((await request(`/torcedores/${fanId}`)).body.equipe_id, secondId);
+      assert.equal((await request(`/equipes/${secondId}`, 'DELETE')).status, 409);
+      assert.equal((await request(`/equipes/${secondId}`, 'PUT', { ...team, nome: 'equipe editada' })).status, 409);
+      assert.equal((await request(`/torcedores/${fanId}`, 'PUT', { ...fan, equipe_id: teamId })).status, 200);
+      assert.equal((await request(`/equipes/${secondId}`, 'DELETE')).status, 204);
+    });
+    await t.test('rejeita CPF duplicado na edição e preserva o cadastro anterior', async () => {
+      const second = await request('/torcedores', 'POST', { ...fan, nome: 'Outro Torcedor', cpf: '11144477735', equipe_id: teamId });
+      assert.equal(second.status, 201);
+      const secondId = second.body.id;
+      assert.equal((await request(`/torcedores/${secondId}`, 'PUT', { ...fan, equipe_id: teamId })).status, 409);
+      assert.equal((await request(`/torcedores/${secondId}`)).body.cpf, '11144477735');
+      assert.equal((await request(`/torcedores/${secondId}`, 'DELETE')).status, 204);
+    });
+    await t.test('valida dados de criação e edição para as duas entidades', async () => {
+      for (const [path, body] of [['equipes', { ...team, serie: 'Z' }], ['torcedores', { ...fan, equipe_id: teamId, data_nascimento: '2025-02-30' }]]) {
+        const id = path === 'equipes' ? teamId : fanId;
+        for (const invalid of [body, {}, []]) {
+          assert.equal((await request(`/${path}`, 'POST', invalid)).status, 400);
+          assert.equal((await request(`/${path}/${id}`, 'PUT', invalid)).status, 400);
+        }
+      }
+      assert.equal((await request(`/equipes/${teamId}`)).body.nome, 'Equipe Editada');
+    });
+    await t.test('retorna 404 para consultas, edições e exclusões inexistentes', async () => {
+      for (const [path, body] of [['equipes', team], ['torcedores', { ...fan, equipe_id: teamId }]]) {
+        for (const method of ['GET', 'PUT', 'DELETE']) {
+          assert.equal((await request(`/${path}/2147483647`, method, method === 'PUT' ? body : undefined)).status, 404);
+        }
+      }
     });
     await t.test('rejeita IDs, JSON e rotas inválidos sem expor erros internos', async () => {
       assert.equal((await request('/equipes/1abc')).status, 400);
