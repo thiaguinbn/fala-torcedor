@@ -14,6 +14,8 @@ Desenvolvida a partir do exercício de CRUD: a interface conversa com o backend 
 - Impedir CPF e nomes de equipe duplicados e exclusão de equipes vinculadas.
 - Exibir estados de carregamento, listas vazias, erros e confirmação de exclusão.
 - Usar interface responsiva com formulários acessíveis por teclado.
+- Consultar os detalhes de um cadastro, acessar a torcida de uma equipe e confirmar o descarte de alterações não salvas.
+- Interface com o logo da G4Flex e sua paleta azul-marinho, magenta e branco, com listas adaptadas para celular.
 
 ## Como executar
 
@@ -56,7 +58,7 @@ npm test
 npm run build
 ```
 
-Sem `TEST_DATABASE_URL`, os testes de validação executam e a integração é explicitamente marcada como ignorada. Para testar HTTP e persistência, use um banco PostgreSQL de teste e defina a variável antes de executar:
+`npm test` executa a validação do backend e os testes das funções do frontend. Sem `TEST_DATABASE_URL`, a integração HTTP é explicitamente marcada como ignorada. Para testar HTTP e persistência, use um banco PostgreSQL de teste e defina a variável antes de executar:
 
 ```bash
 # Linux/macOS
@@ -69,7 +71,18 @@ $env:TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/fala_torce
 npm test
 ```
 
-A integração cria e remove um esquema exclusivo `test_...`, sem apagar as tabelas do aplicativo. A conta do banco precisa de permissão para criar esquemas. O GitHub Actions executa testes com PostgreSQL e o build automaticamente.
+A integração cria e remove um esquema exclusivo `test_...`, sem apagar as tabelas do aplicativo. A conta do banco precisa de permissão para criar esquemas.
+
+Para testar a interface em Chromium, em tamanhos de desktop e celular:
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
+Prepare o `.env`, o banco e as tabelas antes de executar. O Playwright inicia `npm run dev` ou utiliza a aplicação já disponível em `http://localhost:5173`. Os testes cobrem criação, consulta, edição, transferência de torcedor, exclusão, duplicidade, busca, filtros, recuperação de erros e proteção de alterações não salvas. Cada teste remove somente os registros que ele próprio criou. As verificações de acessibilidade usam axe, complementadas por testes de teclado e de largura da tela.
+
+O GitHub Actions executa os testes com PostgreSQL, o build e os testes de navegador. Em caso de falha na interface, salva screenshots e traces como artefato da execução.
 
 O build gera `frontend/dist`. Para inspecioná-lo localmente, mantenha a API rodando com `npm start` e use, em outro terminal, `npm run preview -w frontend`. O preview também encaminha `/api` para a API local.
 
@@ -150,7 +163,7 @@ compose.yaml          PostgreSQL para desenvolvimento
 
 SQL parametrizado (`$1`, `$2`...) mantém os valores separados dos comandos SQL. As chaves e restrições do PostgreSQL também protegem a integridade, mesmo se alguém chamar a API diretamente. O frontend nunca se conecta ao banco.
 
-O Vite encaminha `/api` para Node durante o desenvolvimento. A busca e os filtros são locais, apropriados ao volume pequeno deste exercício. Uma aplicação com muitos registros precisaria de paginação e busca na API. As fontes da interface têm fallback local se o Google Fonts estiver indisponível.
+O Vite encaminha `/api` para Node durante o desenvolvimento. A busca e os filtros são locais, apropriados ao volume pequeno deste exercício. Uma aplicação com muitos registros precisaria de paginação e busca na API. A busca por nome ignora acentos; a busca por CPF aceita dígitos com ou sem pontuação. A interface usa fontes do sistema, sem depender de serviços externos.
 
 Este é um exercício local de CRUD, sem login e sem autorização por usuário. O CORS não substitui autenticação. Antes de disponibilizar uma instância com dados reais, implemente autenticação, controle de acesso, HTTPS e configuração de produção. A senha do Compose serve apenas ao ambiente local. A aplicação não é hospedada automaticamente pelo GitHub: o repositório contém o código para executar.
 

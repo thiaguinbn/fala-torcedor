@@ -1,9 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { Users, Shield, ArrowUpRight, Plus, Search, Pencil, Trash2, X, Trophy, ArrowRight, CircleHelp, LoaderCircle } from 'lucide-react';
-import { api, formatCpf, formatDate } from './api';
+import { ArrowRight, Check, ChevronRight, LoaderCircle, Pencil, Plus, RefreshCw, Search, Shield, Trash2, Users, X } from 'lucide-react';
+import { api, formatCpf, formatDate, localToday, matchesSearch } from './api';
 
+const series = ['A', 'B', 'C', 'D', 'Sem série'];
 const emptyFan = { nome: '', cpf: '', data_nascimento: '', equipe_id: '' };
 const emptyTeam = { nome: '', data_fundacao: '', serie: 'A' };
+const labels = { torcedores: 'Torcedores', equipes: 'Equipes' };
+
+function formValues(entity, record) {
+  const fields = entity === 'torcedores' ? emptyFan : emptyTeam;
+  return Object.fromEntries(Object.entries(fields).map(([key, fallback]) => {
+    const value = String(record?.[key] ?? fallback);
+    return [key, key === 'cpf' ? formatCpf(value) : value];
+  }));
+}
 
 export default function App() {
   const [page, setPage] = useState('torcedores');
@@ -16,113 +26,251 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(emptyFan);
+  const [initialForm, setInitialForm] = useState(emptyFan);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const dialog = useRef(null);
+  const detailRequest = useRef(0);
   const isFan = page === 'torcedores';
+  const modalIsFan = modal?.entity === 'torcedores';
+  const dirty = JSON.stringify(form) !== JSON.stringify(initialForm);
 
   async function load() {
-    setLoading(true); setLoadError('');
+    setLoading(true);
+    setLoadError('');
     try {
       const [newFans, newTeams] = await Promise.all([api('/torcedores'), api('/equipes')]);
-      setFans(newFans); setTeams(newTeams);
-      return true;
-    } catch (error) { setLoadError(error.message); return false; }
-    finally { setLoading(false); }
+      setFans(newFans);
+      setTeams(newTeams);
+    } catch (error) {
+      setLoadError(error.message);
+    } finally {
+      setLoading(false);
+    }
   }
+
   useEffect(() => { load(); }, []);
   useEffect(() => {
-    if (modal && !dialog.current.open) dialog.current.showModal();
-    if (!modal && dialog.current.open) dialog.current.close();
-  }, [modal]);
+    const element = dialog.current;
+    if (modal && !element.open) element.showModal();
+    if (!modal && element.open) element.close();
+    if (!modal) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, [!!modal]);
+  useEffect(() => {
+    if (modal) dialog.current.querySelector('[data-initial-focus]')?.focus();
+  }, [modal?.kind, modal?.entity, modal?.record?.id, discarding]);
   useEffect(() => {
     if (!notice) return;
-    const timer = setTimeout(() => setNotice(''), 5000);
+    const timer = setTimeout(() => setNotice(''), 7000);
     return () => clearTimeout(timer);
   }, [notice]);
 
-  function navigate(next) { setPage(next); setQuery(''); setFilter(''); setNotice(''); }
-  function open(kind, record = null) {
-    setForm(record ? { ...record } : { ...(isFan ? emptyFan : emptyTeam) });
-    setFormError(''); setModal({ kind, record });
+  function navigate(next, team = '') {
+    setPage(next);
+    setQuery('');
+    setFilter(String(team));
+    setNotice('');
   }
-  function close() { if (!saving) { setModal(null); setFormError(''); } }
-  function field(event) { setForm({ ...form, [event.target.name]: event.target.value }); }
+
+  function open(kind, record = null, entity = page) {
+    detailRequest.current++;
+    const values = formValues(entity, record);
+    setForm(values);
+    setInitialForm(values);
+    setFormError('');
+    setDiscarding(false);
+    setModal({ kind, record, entity });
+  }
+
+  async function inspect(record) {
+    open('details', record);
+    const request = detailRequest.current;
+    setModal({ kind: 'details', record, entity: page, loading: true });
+    try {
+      const fresh = await api(`/${page}/${record.id}`);
+      if (request === detailRequest.current) setModal({ kind: 'details', record: fresh, entity: page });
+    } catch (error) {
+      if (request === detailRequest.current) {
+        setFormError(error.message);
+        setModal({ kind: 'details', record, entity: page, failed: true });
+      }
+    }
+  }
+
+  function close(force = false) {
+    if (saving) return;
+    if (!force && modal?.kind === 'form' && dirty) {
+      setDiscarding(true);
+      return;
+    }
+    detailRequest.current++;
+    setModal(null);
+    setFormError('');
+    setDiscarding(false);
+  }
+
+  function create() {
+    if (isFan && teams.length === 0) {
+      navigate('equipes');
+      open('form', null, 'equipes');
+      return;
+    }
+    open('form');
+  }
+
+  function field(event) {
+    const { name, value } = event.target;
+    setForm(current => ({ ...current, [name]: name === 'cpf' ? formatCpf(value.replace(/\D/g, '').slice(0, 11)) : value }));
+  }
+
   async function save(event) {
-    event.preventDefault(); setSaving(true); setFormError('');
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setFormError('');
+    const { entity, record } = modal;
     try {
-      const suffix = modal.record ? `/${modal.record.id}` : '';
-      await api(`/${page}${suffix}`, { method: modal.record ? 'PUT' : 'POST', body: JSON.stringify(form) });
+      await api(`/${entity}${record ? `/${record.id}` : ''}`, {
+        method: record ? 'PUT' : 'POST', body: JSON.stringify(form)
+      });
       setModal(null);
-      setNotice(`${isFan ? 'Torcedor' : 'Equipe'} ${modal.record ? 'atualizado' : 'cadastrado'} com sucesso.`);
+      setNotice(`${entity === 'torcedores' ? 'Torcedor' : 'Equipe'} ${record ? 'atualizado' : 'cadastrado'} com sucesso.`);
       await load();
-    } catch (error) { setFormError(error.message); }
-    finally { setSaving(false); }
+    } catch (error) {
+      setFormError(error.message);
+    } finally {
+      setSaving(false);
+    }
   }
+
   async function remove() {
-    setSaving(true); setFormError('');
+    if (saving) return;
+    setSaving(true);
+    setFormError('');
     try {
-      await api(`/${page}/${modal.record.id}`, { method: 'DELETE' });
-      setModal(null); setNotice(`${isFan ? 'Torcedor excluído' : 'Equipe excluída'} com sucesso.`);
+      await api(`/${modal.entity}/${modal.record.id}`, { method: 'DELETE' });
+      setModal(null);
+      setNotice(`${modalIsFan ? 'Torcedor excluído' : 'Equipe excluída'} com sucesso.`);
       await load();
-    } catch (error) { setFormError(error.message); }
-    finally { setSaving(false); }
+    } catch (error) {
+      setFormError(error.message);
+    } finally {
+      setSaving(false);
+    }
   }
-  const search = query.trim().toLocaleLowerCase('pt-BR');
-  const records = (isFan ? fans : teams).filter(item => {
-    const matches = item.nome.toLocaleLowerCase('pt-BR').includes(search) || (isFan && (formatCpf(item.cpf).includes(search) || item.cpf.includes(search)));
-    return matches && (!filter || String(isFan ? item.equipe_id : item.serie) === filter);
-  });
-  const activeTeams = teams.filter(team => team.total_torcedores > 0).length;
-  const today = new Date().toISOString().slice(0, 10);
+
+  function viewFans(team) {
+    close(true);
+    navigate('torcedores', team.id);
+  }
+
+  const allRecords = isFan ? fans : teams;
+  const records = allRecords.filter(record => matchesSearch(record.nome, query) || (isFan && query.trim() && matchesSearch(record.cpf, query, true)))
+    .filter(record => !filter || String(isFan ? record.equipe_id : record.serie) === filter);
+  const filtered = !!(query.trim() || filter);
+  const blockedDelete = modal?.kind === 'delete' && !modalIsFan && modal.record.total_torcedores > 0;
 
   return <div className="app-shell">
-    <aside className="sidebar">
-      <a className="brand" href="/" aria-label="Fala Torcedor, início"><span className="brand-icon"><Trophy size={24}/></span><span>Fala<span className="brand-light">Torcedor</span><small>GESTÃO DA TORCIDA</small></span></a>
-      <div className="nav-caption">SEU CLUBE, ORGANIZADO</div>
-      <nav aria-label="Navegação principal">
-        <button className={isFan ? 'nav-item active' : 'nav-item'} onClick={() => navigate('torcedores')} aria-current={isFan ? 'page' : undefined}><Users size={19}/> Torcedores <span>{fans.length}</span></button>
-        <button className={!isFan ? 'nav-item active' : 'nav-item'} onClick={() => navigate('equipes')} aria-current={!isFan ? 'page' : undefined}><Shield size={19}/> Equipes <span>{teams.length}</span></button>
-      </nav>
-      <div className="sidebar-bottom"><span className="mini-ball">⚽</span><strong>O futebol conecta.<br/>A gente organiza.</strong><p>Cada torcedor faz parte<br/>dessa história.</p><div className="sidebar-line"/><small>FALA TORCEDOR · 2026</small></div>
-    </aside>
-    <div className="workspace">
-      <header className="topbar"><span>Central de gestão <span className="slash">/</span> <strong>{isFan ? 'Torcedores' : 'Equipes'}</strong></span><span className="workspace-tag"><span/> Espaço da torcida</span></header>
-      <main>
-        <section className="hero">
-          <div className="hero-copy"><span className="eyebrow">JUNTOS, DENTRO E FORA DE CAMPO</span><h1>Toda torcida tem<br/>uma história. <em>Organize a sua.</em></h1><p>Conecte torcedores às suas equipes e cuide de cada<br className="desktop-break"/> cadastro em um só lugar.</p><button className="hero-link" onClick={() => navigate(isFan ? 'equipes' : 'torcedores')}>{isFan ? 'Conhecer as equipes' : 'Ver a torcida'} <ArrowUpRight size={17}/></button></div>
-          <div className="pitch-art" aria-hidden="true"><div className="pitch"><div className="midline"/><div className="center-circle"/><div className="box box-left"/><div className="box box-right"/><div className="goal goal-left"/><div className="goal goal-right"/></div><span className="pitch-dot dot-one"/><span className="pitch-dot dot-two"/><span className="pitch-dot dot-three"/><div className="art-badge"><Trophy size={21}/><span>A paixão nos une.</span></div></div>
-        </section>
-        <section className="stats" aria-label="Resumo dos cadastros">
-          <div className="stat"><span className="stat-icon"><Users size={21}/></span><div><span>Torcedores cadastrados</span><strong>{loading ? '—' : fans.length.toString().padStart(2, '0')}</strong></div><span className="stat-note">Nossa torcida</span></div>
-          <div className="stat"><span className="stat-icon"><Shield size={21}/></span><div><span>Equipes cadastradas</span><strong>{loading ? '—' : teams.length.toString().padStart(2, '0')}</strong></div><span className="stat-note">Em campo</span></div>
-          <div className="stat"><span className="stat-icon lime"><Trophy size={21}/></span><div><span>Equipes com torcedores</span><strong>{loading ? '—' : activeTeams.toString().padStart(2, '0')}</strong></div><span className="stat-note">Conexões reais</span></div>
-        </section>
-        <section className="registry" aria-labelledby="registry-title">
-          <div className="section-header"><div><span className="eyebrow dark">QUEM FAZ O FUTEBOL ACONTECER</span><h2 id="registry-title">{isFan ? 'Torcedores' : 'Equipes'} <span>{isFan ? fans.length : teams.length}</span></h2><p>{isFan ? 'Gerencie os torcedores e encontre cada paixão pelo futebol.' : 'Cadastre os clubes que dão identidade à sua torcida.'}</p></div><button className="primary" onClick={() => open('form')} disabled={loading || !!loadError}><Plus size={18}/>{isFan ? 'Novo torcedor' : 'Nova equipe'}</button></div>
-          {notice && <div className="success" role="status">{notice}<button aria-label="Fechar aviso" onClick={() => setNotice('')}><X size={16}/></button></div>}
-          {loadError ? <div className="error-panel" role="alert"><strong>Não foi possível carregar os cadastros.</strong><p>{loadError}</p><button className="secondary" onClick={load}>Tentar novamente</button></div> : <>
-          <div className="filters"><label className="search"><Search size={18}/><input aria-label={isFan ? 'Buscar torcedor por nome ou CPF' : 'Buscar equipe por nome'} placeholder={isFan ? 'Buscar por nome ou CPF...' : 'Buscar pelo nome da equipe...'} value={query} onChange={e => setQuery(e.target.value)}/></label><label className="filter-select"><span className="sr-only">{isFan ? 'Filtrar por equipe' : 'Filtrar por série'}</span><select value={filter} onChange={e => setFilter(e.target.value)}><option value="">{isFan ? 'Todas as equipes' : 'Todas as séries'}</option>{isFan ? teams.map(team => <option key={team.id} value={team.id}>{team.nome}</option>) : ['A','B','C','D','Sem série'].map(serie => <option key={serie}>{serie}</option>)}</select></label></div>
-          <div className="table-scroll"><table><thead><tr><th>{isFan ? 'TORCEDOR' : 'EQUIPE'}</th><th>{isFan ? 'CPF' : 'FUNDAÇÃO'}</th><th>{isFan ? 'NASCIMENTO' : 'SÉRIE'}</th><th>{isFan ? 'EQUIPE DO CORAÇÃO' : 'TORCEDORES'}</th><th className="actions-heading">AÇÕES</th></tr></thead><tbody>
-            {loading ? <tr><td colSpan="5" className="empty"><LoaderCircle className="spin" size={24}/> Carregando cadastros...</td></tr> : records.map(record => <tr key={record.id}><td><div className="person"><span className={isFan ? 'avatar' : 'avatar team-avatar'}>{isFan ? record.nome.split(' ').filter(Boolean).slice(0,2).map(n => n[0]).join('').toUpperCase() : <Shield size={20}/>}</span><div><strong>{record.nome}</strong><small>#{String(record.id).padStart(3,'0')}</small></div></div></td><td>{isFan ? formatCpf(record.cpf) : formatDate(record.data_fundacao)}</td><td>{isFan ? formatDate(record.data_nascimento) : <span className="team-pill">{record.serie === 'Sem série' ? 'Sem série' : `Série ${record.serie}`}</span>}</td><td>{isFan ? <span className="team-pill"><Shield size={13}/>{record.equipe_nome}</span> : `${record.total_torcedores} torcedor${record.total_torcedores === 1 ? '' : 'es'}`}</td><td><div className="row-actions"><button aria-label={`Editar ${record.nome}`} title="Editar" onClick={() => open('form', record)}><Pencil size={16}/></button><button className="delete" aria-label={`Excluir ${record.nome}`} title="Excluir" onClick={() => open('delete', record)}><Trash2 size={16}/></button></div></td></tr>)}
-          </tbody></table></div>
-          {!loading && records.length === 0 && <div className="empty-state"><span className="empty-icon">{isFan ? <Users size={27}/> : <Shield size={27}/>}</span><h3>{query || filter ? 'Nenhum resultado por aqui' : isFan ? 'A torcida começa com o primeiro cadastro' : 'Toda torcida precisa de uma equipe'}</h3><p>{query || filter ? 'Tente outro nome ou ajuste o filtro.' : isFan ? 'Cadastre uma equipe e adicione o primeiro torcedor.' : 'Adicione a primeira equipe para começar.'}</p>{!query && !filter && <button className="secondary" onClick={() => isFan && teams.length === 0 ? navigate('equipes') : open('form')}>{isFan && teams.length === 0 ? 'Cadastrar equipe' : isFan ? 'Cadastrar torcedor' : 'Cadastrar equipe'}<ArrowRight size={16}/></button>}</div>}
-          <div className="table-footer"><span>{records.length} {records.length === 1 ? 'registro encontrado' : 'registros encontrados'}</span><span>Uma torcida. Muitas histórias.</span></div></>}
-        </section>
-        <footer className="page-footer"><span>Fala Torcedor <span>© 2026</span></span><span>Feito para quem vive o futebol.</span></footer>
-      </main>
-    </div>
-    <dialog ref={dialog} onCancel={e => { e.preventDefault(); close(); }} onClick={e => { if (e.target === dialog.current) close(); }} aria-labelledby="modal-title">
-      {modal && <div className="modal-inner"><div className="modal-top"><span className="modal-symbol">{modal.kind === 'delete' ? <Trash2 size={23}/> : isFan ? <Users size={23}/> : <Shield size={23}/>}</span><button className="icon-button" aria-label="Fechar janela" onClick={close} disabled={saving}><X size={21}/></button></div><h2 id="modal-title">{modal.kind === 'delete' ? `Excluir ${isFan ? 'torcedor' : 'equipe'}?` : `${modal.record ? 'Editar' : isFan ? 'Novo' : 'Nova'} ${isFan ? 'torcedor' : 'equipe'}`}</h2><p className="modal-description">{modal.kind === 'delete' ? `O cadastro de ${modal.record.nome} será removido. Esta ação não pode ser desfeita.` : 'Preencha os dados abaixo. Todos os campos são obrigatórios.'}</p>
-      {formError && <div className="form-error" role="alert">{formError}</div>}
-      {modal.kind === 'delete' ? <div className="modal-buttons"><button className="secondary" onClick={close} disabled={saving}>Cancelar</button><button className="danger" onClick={remove} disabled={saving}>{saving ? 'Excluindo...' : 'Confirmar exclusão'}</button></div> : <form onSubmit={save}>
-        <fieldset disabled={saving}><label>Nome {isFan ? 'completo' : 'da equipe'}<input autoFocus name="nome" value={form.nome} onChange={field} minLength={2} maxLength={100} required placeholder={isFan ? 'Ex.: Maria da Silva' : 'Ex.: Clube Atlético'}/></label>
-        {isFan && <label>CPF<input name="cpf" value={form.cpf} onChange={field} maxLength={14} required placeholder="000.000.000-00" inputMode="numeric"/></label>}
-        <label>{isFan ? 'Data de nascimento' : 'Data de fundação'}<input type="date" min="0001-01-01" max={today} name={isFan ? 'data_nascimento' : 'data_fundacao'} value={isFan ? form.data_nascimento : form.data_fundacao} onChange={field} required/></label>
-        {isFan ? <label>Equipe do coração<select name="equipe_id" value={form.equipe_id} onChange={field} required><option value="">Selecione uma equipe</option>{teams.map(team => <option key={team.id} value={team.id}>{team.nome}</option>)}</select></label> : <label>Série<select name="serie" value={form.serie} onChange={field} required>{['A','B','C','D','Sem série'].map(serie => <option key={serie} value={serie}>{serie === 'Sem série' ? serie : `Série ${serie}`}</option>)}</select></label>}
-        {isFan && teams.length === 0 && <p className="form-hint"><CircleHelp size={16}/>Cadastre uma equipe antes de adicionar torcedores.</p>}
-        <div className="modal-buttons"><button className="secondary" type="button" onClick={close}>Cancelar</button><button className="primary" disabled={isFan && teams.length === 0} type="submit">{saving ? 'Salvando...' : 'Salvar cadastro'}<ArrowRight size={16}/></button></div></fieldset>
-      </form>}</div>}
+    <header className="masthead">
+      <div className="masthead-inner">
+        <img className="company-logo" src="/g4flex.png" alt="G4Flex — integrated solutions" width="177" height="174"/>
+        <div className="product-name"><span>Fala Torcedor</span><small>Cadastro de torcedores e equipes</small></div>
+        <span className="masthead-label">Gestão de cadastros</span>
+      </div>
+    </header>
+
+    <div className="navigation-bar"><nav className="navigation" aria-label="Navegação principal">
+      <button className={isFan ? 'nav-item active' : 'nav-item'} aria-current={isFan ? 'page' : undefined} onClick={() => navigate('torcedores')}>
+        <Users size={18}/> Torcedores <span>{loading || loadError ? '—' : fans.length}</span>
+      </button>
+      <button className={!isFan ? 'nav-item active' : 'nav-item'} aria-current={!isFan ? 'page' : undefined} onClick={() => navigate('equipes')}>
+        <Shield size={18}/> Equipes <span>{loading || loadError ? '—' : teams.length}</span>
+      </button>
+    </nav></div>
+
+    <main>
+      <section className="page-heading" aria-labelledby="registry-title">
+        <div><p className="breadcrumb">Cadastros <ChevronRight size={13}/> {labels[page]}</p>
+          <h1 id="registry-title">{labels[page]}</h1>
+          <p className="page-description">{isFan ? 'Consulte os torcedores, atualize seus dados e organize os vínculos com as equipes.' : 'Mantenha os dados dos clubes e acompanhe os torcedores de cada equipe.'}</p>
+        </div>
+        <button className="primary" disabled={loading || !!loadError} onClick={create}><Plus size={18}/>{isFan ? teams.length ? 'Novo torcedor' : 'Cadastrar primeira equipe' : 'Nova equipe'}</button>
+      </section>
+
+      <div className="notice-slot" role="status">{notice && <div className="success"><Check size={18}/><span>{notice}</span><button className="icon-button" aria-label="Fechar aviso" onClick={() => setNotice('')}><X size={18}/></button></div>}</div>
+
+      <section className="registry" aria-label={`Lista de ${page}`} aria-busy={loading}>
+        <div className="registry-toolbar">
+          <div className="registry-title"><h2>{labels[page]} {isFan ? 'cadastrados' : 'cadastradas'}</h2><span>{loading || loadError ? '—' : allRecords.length}</span></div>
+          <button className="text-button" disabled={loading} onClick={load}><RefreshCw size={15} className={loading ? 'spin' : ''}/><span>Atualizar</span></button>
+        </div>
+        {loadError ? <div className="error-panel" role="alert"><h3>Não foi possível carregar os cadastros</h3><p>{loadError}</p><button className="secondary" onClick={load}>Tentar novamente</button></div> : <>
+          <div className="filters">
+            <label className="search-label"><span>Buscar {isFan ? 'torcedor' : 'equipe'}</span><div className="search-input"><Search size={18}/><input type="search" placeholder={isFan ? 'Nome ou CPF' : 'Nome da equipe'} value={query} onChange={event => setQuery(event.target.value)}/></div></label>
+            <label className="filter-label"><span>{isFan ? 'Equipe' : 'Série'}</span><select value={filter} onChange={event => setFilter(event.target.value)}>
+              <option value="">{isFan ? 'Todas as equipes' : 'Todas as séries'}</option>
+              {isFan ? teams.map(team => <option key={team.id} value={team.id}>{team.nome}</option>) : series.map(serie => <option key={serie} value={serie}>{serie === 'Sem série' ? serie : `Série ${serie}`}</option>)}
+            </select></label>
+            {filtered && <button className="text-button clear-filters" onClick={() => { setQuery(''); setFilter(''); }}><X size={15}/>Limpar filtros</button>}
+          </div>
+
+          {!loading && !allRecords.length ? <div className="empty-state">
+            {isFan ? <Users size={30} strokeWidth={1.5}/> : <Shield size={30} strokeWidth={1.5}/>}
+            <h3>{isFan ? 'Nenhum torcedor cadastrado' : 'Nenhuma equipe cadastrada'}</h3>
+            <p>{isFan ? teams.length ? 'Adicione um torcedor e selecione sua equipe.' : 'Para começar, cadastre uma equipe. Depois, adicione os torcedores.' : 'Adicione uma equipe com nome, data de fundação e série.'}</p>
+            <button className="secondary" onClick={create}><Plus size={17}/>{isFan && teams.length ? 'Cadastrar torcedor' : 'Cadastrar equipe'}</button>
+          </div> : <div className="table-scroll"><table>
+            <thead><tr><th scope="col">{isFan ? 'Nome' : 'Equipe'}</th><th scope="col">{isFan ? 'CPF' : 'Fundação'}</th><th scope="col">{isFan ? 'Nascimento' : 'Série'}</th><th scope="col">{isFan ? 'Equipe' : 'Torcedores'}</th><th scope="col" className="actions-heading">Ações</th></tr></thead>
+            <tbody>{loading ? <tr><td colSpan="5" className="table-message"><LoaderCircle size={20} className="spin"/>Carregando cadastros…</td></tr> : !records.length ? <tr><td colSpan="5" className="table-message"><strong>Nenhum resultado encontrado</strong><span>Altere a busca ou limpe os filtros para ver os cadastros.</span><button className="text-button" onClick={() => { setQuery(''); setFilter(''); }}>Limpar filtros</button></td></tr> : records.map(record => <tr key={record.id}>
+              <td data-label="Nome" className="name-cell"><button className="record-name" onClick={() => inspect(record)}>{record.nome}<ChevronRight size={15}/></button><span className="record-id">Cadastro #{String(record.id).padStart(3, '0')}</span></td>
+              <td data-label={isFan ? 'CPF' : 'Fundação'} className="numeric">{isFan ? formatCpf(record.cpf) : formatDate(record.data_fundacao)}</td>
+              <td data-label={isFan ? 'Nascimento' : 'Série'}>{isFan ? <span className="numeric">{formatDate(record.data_nascimento)}</span> : <span className="series-tag">{record.serie === 'Sem série' ? record.serie : `Série ${record.serie}`}</span>}</td>
+              <td data-label={isFan ? 'Equipe' : 'Torcedores'}>{isFan ? record.equipe_nome : <button className="count-link" aria-label={`Ver torcedores de ${record.nome}`} onClick={() => viewFans(record)}>{record.total_torcedores} <span>{record.total_torcedores === 1 ? 'torcedor' : 'torcedores'}</span><ArrowRight size={14}/></button>}</td>
+              <td className="action-cell"><div className="row-actions"><button className="row-action" aria-label={`Editar ${record.nome}`} onClick={() => open('form', record)}><Pencil size={15}/><span>Editar</span></button><button className="row-action delete" aria-label={`Excluir ${record.nome}`} onClick={() => open('delete', record)}><Trash2 size={15}/><span>Excluir</span></button></div></td>
+            </tr>)}</tbody>
+          </table></div>}
+          <div className="table-footer"><span>{loading ? 'Carregando…' : `${records.length} ${records.length === 1 ? 'registro' : 'registros'}${filtered ? ` de ${allRecords.length}` : ''}`}</span><span>Clique no nome para consultar o cadastro</span></div>
+        </>}
+      </section>
+      <footer className="page-footer"><span>Fala Torcedor</span><span>G4Flex <span aria-hidden="true">/</span> Gestão de cadastros</span></footer>
+    </main>
+
+    <dialog ref={dialog} aria-labelledby="modal-title" aria-describedby="modal-description" onCancel={event => { event.preventDefault(); close(); }} onClick={event => { if (event.target === dialog.current) close(); }}>
+      {modal && <div className="modal-inner">
+        <header className="modal-header"><span className="modal-category">{labels[modal.entity]}</span><button className="icon-button" aria-label="Fechar janela" disabled={saving} onClick={() => close()}><X size={21}/></button></header>
+        <h2 id="modal-title">{discarding ? 'Descartar alterações?' : modal.kind === 'details' ? 'Dados do cadastro' : modal.kind === 'delete' ? blockedDelete ? 'Equipe com torcedores' : `Excluir ${modalIsFan ? 'torcedor' : 'equipe'}?` : `${modal.record ? 'Editar' : modalIsFan ? 'Novo' : 'Nova'} ${modalIsFan ? 'torcedor' : 'equipe'}`}</h2>
+        <p id="modal-description" className="modal-description">{discarding ? 'Os dados que você alterou ainda não foram salvos.' : modal.kind === 'details' ? `Cadastro #${String(modal.record.id).padStart(3, '0')}` : modal.kind === 'delete' ? blockedDelete ? 'Transfira ou exclua os torcedores vinculados antes de excluir esta equipe.' : 'Confira o nome abaixo. A exclusão é permanente.' : 'Todos os campos são obrigatórios.'}</p>
+        {discarding ? <div className="modal-buttons"><button className="secondary" data-initial-focus autoFocus onClick={() => setDiscarding(false)}>Continuar editando</button><button className="danger" onClick={() => close(true)}>Descartar alterações</button></div> : <>
+          {formError && <div className="form-error" role="alert">{formError}</div>}
+          {modal.kind === 'details' ? <>
+            {modal.loading ? <p className="detail-loading" role="status"><LoaderCircle size={19} className="spin"/>Carregando cadastro…</p> : !modal.failed && <dl className="record-details">
+              <div className="detail-full"><dt>Nome {modalIsFan ? 'completo' : 'da equipe'}</dt><dd>{modal.record.nome}</dd></div>
+              {modalIsFan && <div><dt>CPF</dt><dd className="numeric">{formatCpf(modal.record.cpf)}</dd></div>}
+              <div><dt>{modalIsFan ? 'Data de nascimento' : 'Data de fundação'}</dt><dd className="numeric">{formatDate(modalIsFan ? modal.record.data_nascimento : modal.record.data_fundacao)}</dd></div>
+              <div><dt>{modalIsFan ? 'Equipe' : 'Série'}</dt><dd>{modalIsFan ? modal.record.equipe_nome : modal.record.serie === 'Sem série' ? 'Sem série' : `Série ${modal.record.serie}`}</dd></div>
+              {!modalIsFan && <div><dt>Torcedores vinculados</dt><dd>{modal.record.total_torcedores}</dd></div>}
+            </dl>}
+            <div className="modal-buttons"><button className="secondary" onClick={() => close()}>Fechar</button><button className="primary" disabled={modal.loading || modal.failed} onClick={() => open('form', modal.record, modal.entity)}><Pencil size={16}/>Editar cadastro</button></div>
+          </> : modal.kind === 'delete' ? <>
+            <div className="delete-record"><strong>{modal.record.nome}</strong><span>{modalIsFan ? formatCpf(modal.record.cpf) : `${modal.record.total_torcedores} torcedores vinculados`}</span></div>
+            <div className="modal-buttons"><button className="secondary" data-initial-focus autoFocus disabled={saving} onClick={() => close()}>Cancelar</button>{blockedDelete ? <button className="primary" onClick={() => viewFans(modal.record)}>Ver torcedores<ArrowRight size={16}/></button> : <button className="danger" disabled={saving} onClick={remove}>{saving ? 'Excluindo…' : 'Confirmar exclusão'}</button>}</div>
+          </> : <form onSubmit={save}>
+            <fieldset disabled={saving}>
+              <label>Nome {modalIsFan ? 'completo' : 'da equipe'}<input data-initial-focus autoFocus name="nome" autoComplete={modalIsFan ? 'name' : 'off'} value={form.nome} onChange={field} minLength={2} maxLength={100} required/></label>
+              {modalIsFan && <label><span id="cpf-label">CPF</span><input name="cpf" aria-labelledby="cpf-label" value={form.cpf} onChange={field} maxLength={14} required inputMode="numeric" placeholder="000.000.000-00" aria-describedby="cpf-hint"/><small id="cpf-hint">Informe os 11 dígitos do CPF.</small></label>}
+              <div className={modalIsFan ? '' : 'form-columns'}>
+                <label>{modalIsFan ? 'Data de nascimento' : 'Data de fundação'}<input type="date" min="0001-01-01" max={localToday()} name={modalIsFan ? 'data_nascimento' : 'data_fundacao'} value={modalIsFan ? form.data_nascimento : form.data_fundacao} onChange={field} required/></label>
+                {modalIsFan ? <label>Equipe<select name="equipe_id" value={form.equipe_id} onChange={field} required><option value="">Selecione uma equipe</option>{teams.map(team => <option key={team.id} value={team.id}>{team.nome}</option>)}</select></label> : <label>Série<select name="serie" value={form.serie} onChange={field} required>{series.map(serie => <option key={serie} value={serie}>{serie === 'Sem série' ? serie : `Série ${serie}`}</option>)}</select></label>}
+              </div>
+              <div className="modal-buttons"><button className="secondary" type="button" onClick={() => close()}>Cancelar</button><button className="primary" type="submit">{saving ? <><LoaderCircle size={17} className="spin"/>Salvando…</> : modal.record ? 'Salvar alterações' : modalIsFan ? 'Cadastrar torcedor' : 'Cadastrar equipe'}</button></div>
+            </fieldset>
+          </form>}
+        </>}
+      </div>}
     </dialog>
   </div>;
 }

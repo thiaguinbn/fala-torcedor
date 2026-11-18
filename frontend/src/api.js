@@ -15,4 +15,21 @@ export async function api(path, options = {}) {
   return data;
 }
 export const formatDate = value => value.split('-').reverse().join('/');
-export const formatCpf = value => value.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+export const formatCpf = value => value.replace(/\D/g, '').slice(0, 11)
+  .replace(/^(\d{3})(\d)/, '$1.$2')
+  .replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+  .replace(/\.(\d{3})(\d)/, '.$1-$2');
+
+export function localToday(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+export function matchesSearch(value, query, cpf = false) {
+  const normalize = text => text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('pt-BR');
+  const search = query.trim();
+  if (cpf) {
+    const digits = search.replace(/\D/g, '');
+    return !!digits && /^[\d.\-\s]+$/.test(search) && value.includes(digits);
+  }
+  return normalize(value).includes(normalize(search));
+}
